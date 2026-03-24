@@ -1,78 +1,152 @@
-# agnetgo-mediflow-backend
+# agentgo-mediflow-backend
 
-> **전역 시스템 제약조건 및 코드 컨벤션**
-> 본 프로젝트는 엔터프라이즈 B2B SaaS 아키텍처를 지향하며, 공통 코드 컨벤션을 따릅니다.
-> 상세 기준은 상위 디자인 시스템 및 저장소 전역 컨벤션 문서를 우선 확인하세요.
-> 주요 백엔드 제약: **Layered Architecture, Schema Validation, Typed Services**
+AI 기반 병원 마케팅 운영 플랫폼의 FastAPI 백엔드입니다.
+브랜드 프로필 관리, 수익성 시뮬레이션, 멀티채널 콘텐츠 생성, 검토/승인 워크플로를 API로 제공합니다.
 
-agnetgo-mediflow의 bootstrap API와 정책/상태 전달을 담당하는 백엔드 MVP 초안입니다.
+## 아키텍처
 
-## Summary
-
-- 담당 도메인: 병원별 이벤트 템플릿, 금칙어, 브랜드 톤, 시술 카테고리를 입력값으로…, 하나의 프로모션 기획안에서 블로그, SNS, 홈페이지, 앱용 문안과 소…, 단순 문구 생성이 아니라 병원별 입력 자산을 반영해 결과물 차별화를 만…, 입력값: 프로모션 가격, 정상가, 시술 원가, 예상 모집객 수, 업셀…
-- 주요 사용자: 개원의: 병원 브랜딩, 시술 포지셔닝, 계정 운영, 이벤트 프로모션 효율을 함께 관리해야 하는 사용자, 병원 마케터/실장: 이벤트 기획, 가격 판단, 채널 운영, 게시 실행을 실무로 담당하는 사용자, 봉직의: 개원 전 퍼스널 브랜딩과 전문 분야 포지셔닝을 시작하려는 사용자
-- 핵심 역할:
-- 병원별 이벤트 템플릿, 금칙어, 브랜드 톤, 시술 카테고리를 입력값으로 관리한다.
-- 하나의 프로모션 기획안에서 블로그, SNS, 홈페이지, 앱용 문안과 소재 초안을 동시에 만든다.
-- 단순 문구 생성이 아니라 병원별 입력 자산을 반영해 결과물 차별화를 만든다.
-- 입력값: 프로모션 가격, 정상가, 시술 원가, 예상 모집객 수, 업셀 전환율, 평균 객단가, 재방문율
-
-## Policy Notes
-
-- 의료광고 심의와 표현 제한 검토가 반드시 포함되어야 한다.
-- 플랫폼별 정책 차이에 따라 문안 룰셋을 분리 관리해야 한다.
-- 초기에는 병원 실데이터 부족으로 일반 모델 기반 추정치가 일부 포함될 수 있다.
-- AI가 만든 초안은 항상 사람 검수와 최종 승인 단계를 거쳐야 한다.
-
-## Stack
-
-- Python 3.11+
-- FastAPI
-- Uvicorn
-- Pydantic
-
-## Structure
-
-```text
-app/
-├── api/
-├── core/
-├── models/
-├── repositories/
-├── schemas/
-├── services/
-└── main.py
+```
+Router → Service → Repository
 ```
 
-## Conventions
+- **Router** (`app/api/routes.py`): 요청 수신, 스키마 검증, 응답 반환
+- **Service** (`app/services/`): 비즈니스 로직 (수익성 계산, 콘텐츠 생성)
+- **Repository** (`app/repositories/`): 데이터 접근 (in-memory, 추후 DB 교체 가능)
+- **Schema** (`app/schemas/contracts.py`): 입출력 계약 (Pydantic)
+- **Deps** (`app/api/deps.py`): 의존성 주입 (lru_cache 싱글턴)
 
-- Router, Service, Repository 책임을 분리합니다.
-- 입력과 출력은 스키마로 검증합니다.
-- 정책과 상태 전이는 서비스 계층에서 일관되게 처리합니다.
-- bootstrap payload도 API 계약으로 노출합니다.
+## 디렉토리 구조
 
-## Run
+```
+app/
+├── api/
+│   ├── deps.py          # 의존성 주입 함수 (lru_cache 싱글턴)
+│   └── routes.py        # 전체 엔드포인트 정의
+├── core/
+│   └── config.py        # pydantic-settings 기반 환경 변수 로딩
+├── repositories/
+│   ├── bootstrap_repository.py   # 정적 부트스트랩 데이터
+│   ├── brand_repository.py       # 브랜드 프로필 in-memory 저장소
+│   └── review_repository.py      # 검토 항목 in-memory 저장소
+├── schemas/
+│   └── contracts.py     # 전체 입출력 스키마
+├── services/
+│   ├── planning_service.py   # 수익성 시뮬레이션 계산
+│   └── content_service.py   # 채널별 콘텐츠 초안 생성
+└── main.py              # FastAPI 앱 초기화 + CORS
+tests/
+├── test_health.py       # 헬스체크 + 시뮬레이션
+├── test_brand.py        # 브랜드 프로필 CRUD
+├── test_content.py      # 콘텐츠 생성
+└── test_review.py       # 검토 상태 업데이트
+```
+
+## API 엔드포인트
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/health` | 헬스체크 |
+| `GET` | `/api/bootstrap` | 앱 초기 설정 데이터 |
+| `POST` | `/api/brand` | 브랜드 프로필 저장 |
+| `GET` | `/api/brand` | 브랜드 프로필 조회 |
+| `POST` | `/api/simulation/preview` | 수익성 시뮬레이션 계산 |
+| `POST` | `/api/content/generate` | 채널별 콘텐츠 초안 생성 |
+| `GET` | `/api/review/checklist` | 검토 체크리스트 조회 |
+| `PATCH` | `/api/review/{stage}` | 검토 항목 상태 변경 |
+| `GET` | `/api/channels/drafts` | 부트스트랩 정적 채널 초안 |
+
+### 주요 스키마
+
+**`POST /api/brand`** 요청
+```json
+{
+  "hospital_name": "테스트 피부과",
+  "target_audience": "30-40대 직장 여성",
+  "doctor_philosophy": "과장 없는 솔직한 설명",
+  "signature_procedures": ["피코토닝", "잡티케어"],
+  "brand_tone": ["신뢰감", "친근함"],
+  "banned_terms": ["완치", "100% 효과"]
+}
+```
+
+**`POST /api/simulation/preview`** 요청
+```json
+{
+  "promotion_name": "봄 이벤트",
+  "promo_price": 149000,
+  "list_price": 220000,
+  "procedure_cost": 42000,
+  "expected_leads": 30,
+  "close_rate": 0.4,
+  "upsell_rate": 0.2,
+  "average_upsell_revenue": 80000,
+  "repeat_visit_rate": 0.1,
+  "repeat_visit_revenue": 100000,
+  "ad_budget": 1000000
+}
+```
+
+**`POST /api/content/generate`** 요청 (브랜드 프로필 저장 후 사용 가능)
+```json
+{
+  "event_name": "봄 피부 이벤트",
+  "event_start": "2026-04-01",
+  "event_end": "2026-04-30",
+  "core_message": "봄맞이 피부 관리를 전문의와 함께",
+  "highlights": ["30% 할인", "무료 상담"],
+  "channels": ["blog", "sns", "web", "app"]
+}
+```
+
+**`PATCH /api/review/{stage}`** 요청
+```json
+{
+  "status": "approved",
+  "notes": "확인 완료"
+}
+```
+- `status` 허용값: `pending` | `in_review` | `approved` | `rejected`
+
+## 실행
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+# http://localhost:8000
+# API 문서: http://localhost:8000/docs
 ```
 
-## Test
+## 테스트
 
 ```bash
-pytest
+python3 -m pytest tests/ -v
+# 25 passed
 ```
 
-## Environment
+## 환경 변수
 
-- `.env.example` 제공
-- `APP_NAME`, `APP_ENV`, `DATABASE_URL`, `EXTERNAL_API_KEY` 분리
+`.env.example`을 복사해 `.env`로 사용합니다.
 
-## Review Points
+```env
+APP_NAME=agentgo-mediflow
+APP_ENV=local
+DATABASE_URL=sqlite:///./app.db
+EXTERNAL_API_KEY=stub-key
+ALLOWED_ORIGINS=["http://localhost:5173"]
+```
 
-- API 계약과 서비스 책임이 README에 드러나는가
-- 스키마, 서비스, 저장소 계층이 구조와 대응되는가
-- 실행과 테스트 방법이 누락되지 않았는가
+## 스택
+
+- Python 3.9+
+- FastAPI 0.115
+- Pydantic 2.9 + pydantic-settings 2.5
+- Uvicorn 0.30
+- pytest 8.3 + httpx 0.27
+
+## 정책
+
+- 의료광고 심의와 표현 제한 검토가 반드시 포함되어야 한다.
+- AI가 만든 초안은 항상 사람 검수와 최종 승인 단계를 거쳐야 한다.
+- 플랫폼별 정책 차이에 따라 문안 룰셋을 분리 관리해야 한다.

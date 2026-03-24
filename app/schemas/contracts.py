@@ -1,9 +1,13 @@
 from pydantic import BaseModel, Field
 
 
+# ── Health ────────────────────────────────────────────────────────────────────
+
 class HealthResponse(BaseModel):
     status: str
 
+
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 class BootstrapResponse(BaseModel):
     product: str
@@ -13,6 +17,19 @@ class BootstrapResponse(BaseModel):
     policies: list[str]
     features: dict[str, list[dict[str, str]]]
 
+
+# ── Brand Profile ─────────────────────────────────────────────────────────────
+
+class BrandProfile(BaseModel):
+    hospital_name: str = Field(min_length=1, max_length=50)
+    target_audience: str = Field(min_length=1, max_length=100)
+    doctor_philosophy: str = Field(min_length=1, max_length=300)
+    signature_procedures: list[str] = Field(min_length=1)
+    brand_tone: list[str] = Field(min_length=1)
+    banned_terms: list[str] = []
+
+
+# ── Simulation ────────────────────────────────────────────────────────────────
 
 class SimulationInput(BaseModel):
     promotion_name: str
@@ -39,12 +56,45 @@ class SimulationResponse(BaseModel):
     breakeven_reached: bool
 
 
+# ── Content Generation ────────────────────────────────────────────────────────
+
+class ContentRequest(BaseModel):
+    event_name: str = Field(min_length=1)
+    event_start: str
+    event_end: str
+    core_message: str = Field(min_length=1)
+    highlights: list[str] = []
+    channels: list[str] = Field(min_length=1)
+    additional_notes: str = ""
+
+
+class DraftContent(BaseModel):
+    headline: str
+    body: str
+    cta: str
+
+
+class GenerationResponse(BaseModel):
+    event_name: str
+    channels: dict[str, DraftContent]
+    review_notes: list[str]
+
+
+# ── Review / Approval ─────────────────────────────────────────────────────────
+
 class ReviewChecklistItem(BaseModel):
     stage: str
     owner: str
     status: str
     notes: str
 
+
+class ReviewStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(pending|in_review|approved|rejected)$")
+    notes: str = ""
+
+
+# ── Channel Draft (bootstrap) ─────────────────────────────────────────────────
 
 class ChannelDraft(BaseModel):
     format: str

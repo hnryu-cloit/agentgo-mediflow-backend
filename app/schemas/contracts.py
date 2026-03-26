@@ -1,103 +1,122 @@
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
+from datetime import datetime
+from typing import List, Optional, Dict
+from sqlmodel import SQLModel, Field, Relationship, JSON, Column
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Base / Mixins ─────────────────────────────────────────────────────────────
 
-class HealthResponse(BaseModel):
+class TimestampMixin(SQLModel):
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Clinic (Brand Profile) ────────────────────────────────────────────────────
+
+class Clinic(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    clinic_type: str = Field(default="PREMIUM") # FACTORY | PREMIUM
+    target_audience: str
+    doctor_philosophy: str
+    signature_procedures: List[str] = Field(sa_column=Column(JSON))
+    brand_tone: List[str] = Field(sa_column=Column(JSON))
+    banned_terms: List[str] = Field(default=[], sa_column=Column(JSON))
+
+
+# ── Procedure Master ──────────────────────────────────────────────────────────
+
+class Procedure(SQLModel, table=True):
+    id: str = Field(primary_key=True) # e.g. "proc_ult_600"
+    name: str
+    category: str
+    brand: Optional[str] = None
+    consumable_cost: float # 팁값, 약제 원가
+    labor_cost: float # 인건비 추정
+    list_price: float # 정가
+    min_price_limit: float # 마진 하한선
+
+
+# ── Promotion / Simulation ────────────────────────────────────────────────────
+
+class Promotion(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    procedure_id: str = Field(foreign_key="procedure.id")
+    promo_price: float
+    expected_leads: int
+    conversion_rate: float
+    staff_incentive: float
+    ad_spend: float
+    upsell_estimate: float
+
+
+# ── CRM / Lead ────────────────────────────────────────────────────────────────
+
+class Lead(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    customer_name: str # 김*수 (마스킹)
+    phone_enc: str # 암호화된 연락처
+    source: str # FB, IG, BLOG, APP
+    status: str = Field(default="APPLIED") # APPLIED | VISITED | NO_SHOW
+    promotion_id: Optional[int] = Field(default=None, foreign_key="promotion.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── AI Content / Campaign ─────────────────────────────────────────────────────
+
+class Campaign(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    promotion_id: int = Field(foreign_key="promotion.id")
+    event_name: str
+    core_message: str
+    channels_content: Dict[str, Dict] = Field(default={}, sa_column=Column(JSON))
+    review_notes: List[str] = Field(default=[], sa_column=Column(JSON))
+
+
+# ── Review / Approval ─────────────────────────────────────────────────────────
+
+class ReviewItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    step: str
+    assignee: str
+    description: str
+    status: str = Field(default="pending") # pending | in_review | approved | rejected
+
+
+# ── API Response Schemas (Non-Table) ──────────────────────────────────────────
+
+class HealthResponse(SQLModel):
     status: str
 
-
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
-
-class BootstrapResponse(BaseModel):
-    product: str
-    summary: str
-    users: list[str]
-    goals: list[str]
-    policies: list[str]
-    features: dict[str, list[dict[str, str]]]
-
-
-# ── Brand Profile ─────────────────────────────────────────────────────────────
-
-class BrandProfile(BaseModel):
-    hospital_name: str = Field(min_length=1, max_length=50)
-    target_audience: str = Field(min_length=1, max_length=100)
-    doctor_philosophy: str = Field(min_length=1, max_length=300)
-    signature_procedures: list[str] = Field(min_length=1)
-    brand_tone: list[str] = Field(min_length=1)
-    banned_terms: list[str] = []
-
-
-# ── Simulation ────────────────────────────────────────────────────────────────
-
-class SimulationInput(BaseModel):
-    promotion_name: str
-    promo_price: float = Field(gt=0)
-    list_price: float = Field(gt=0)
-    procedure_cost: float = Field(ge=0)
-    expected_leads: int = Field(ge=0)
-    close_rate: float = Field(ge=0, le=1)
-    upsell_rate: float = Field(ge=0, le=1)
-    average_upsell_revenue: float = Field(ge=0)
-    repeat_visit_rate: float = Field(ge=0, le=1)
-    repeat_visit_revenue: float = Field(ge=0)
-    ad_budget: float = Field(ge=0)
-
-
-class SimulationResponse(BaseModel):
-    promotion_name: str
+class SimulationResponse(SQLModel):
     expected_patients: float
     expected_revenue: float
     expected_cost: float
     projected_profit: float
     break_even_patients: float
-    allowed_ad_budget: float
     breakeven_reached: bool
 
 
-# ── Content Generation ────────────────────────────────────────────────────────
+# ── AI Content Request/Response (Non-Table) ───────────────────────────────────
 
-class ContentRequest(BaseModel):
-    event_name: str = Field(min_length=1)
+class ContentRequest(SQLModel):
+    event_name: str
     event_start: str
     event_end: str
-    core_message: str = Field(min_length=1)
-    highlights: list[str] = []
-    channels: list[str] = Field(min_length=1)
-    additional_notes: str = ""
+    core_message: str
+    highlights: List[str] = []
+    channels: List[str] = []
 
 
-class DraftContent(BaseModel):
+class DraftContent(SQLModel):
     headline: str
     body: str
     cta: str
 
 
-class GenerationResponse(BaseModel):
+class GenerationResponse(SQLModel):
     event_name: str
-    channels: dict[str, DraftContent]
-    review_notes: list[str]
-
-
-# ── Review / Approval ─────────────────────────────────────────────────────────
-
-class ReviewChecklistItem(BaseModel):
-    stage: str
-    owner: str
-    status: str
-    notes: str
-
-
-class ReviewStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(pending|in_review|approved|rejected)$")
-    notes: str = ""
-
-
-# ── Channel Draft (bootstrap) ─────────────────────────────────────────────────
-
-class ChannelDraft(BaseModel):
-    format: str
-    headline: str
-    body: str
-    cta: str
+    channels: Dict[str, DraftContent]
+    review_notes: List[str]

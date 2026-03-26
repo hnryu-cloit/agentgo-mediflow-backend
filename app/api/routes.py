@@ -1,30 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
 
-from app.api.deps import (
-    get_bootstrap_repository,
-    get_brand_repository,
-    get_content_service,
-    get_review_repository,
-)
-from app.repositories.bootstrap_repository import BootstrapRepository
-from app.repositories.brand_repository import BrandRepository
-from app.repositories.review_repository import ReviewRepository
+from app.api.deps import get_session
 from app.schemas.contracts import (
-    BrandProfile,
-    BootstrapResponse,
-    ChannelDraft,
-    ContentRequest,
-    GenerationResponse,
-    HealthResponse,
-    ReviewChecklistItem,
-    ReviewStatusUpdate,
+    Procedure,
     SimulationInput,
     SimulationResponse,
+    HealthResponse,
+    Clinic,
+    ContentRequest,
+    GenerationResponse,
+    Lead,
+    ReviewItem
 )
-from app.services.content_service import ContentService
 from app.services.planning_service import PlanningService
+from app.services.content_service import ContentService
 
 router = APIRouter()
+planning_service = PlanningService()
+content_service = ContentService()
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -34,33 +28,13 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
+# ── Procedures (Master Data) ──────────────────────────────────────────────────
 
-@router.get("/api/bootstrap", response_model=BootstrapResponse)
-def bootstrap(
-    repo: BootstrapRepository = Depends(get_bootstrap_repository),
-) -> BootstrapResponse:
-    return BootstrapResponse(**repo.get_bootstrap())
-
-
-# ── Brand Profile ─────────────────────────────────────────────────────────────
-
-@router.post("/api/brand", response_model=BrandProfile, status_code=201)
-def save_brand_profile(
-    payload: BrandProfile,
-    repo: BrandRepository = Depends(get_brand_repository),
-) -> BrandProfile:
-    return repo.save(payload)
-
-
-@router.get("/api/brand", response_model=BrandProfile)
-def get_brand_profile(
-    repo: BrandRepository = Depends(get_brand_repository),
-) -> BrandProfile:
-    profile = repo.get()
-    if profile is None:
-        raise HTTPException(status_code=404, detail="브랜드 프로필이 설정되지 않았습니다.")
-    return profile
+@router.get("/api/procedures", response_model=list[Procedure])
+def list_procedures(
+    db: Session = Depends(get_session)
+) -> list[Procedure]:
+    return planning_service.get_procedures(db)
 
 
 # ── Simulation ────────────────────────────────────────────────────────────────
@@ -68,54 +42,95 @@ def get_brand_profile(
 @router.post("/api/simulation/preview", response_model=SimulationResponse)
 def simulate(
     payload: SimulationInput,
-    repo: BootstrapRepository = Depends(get_bootstrap_repository),
+    db: Session = Depends(get_session)
 ) -> SimulationResponse:
-    service = PlanningService(repository=repo)
-    return service.simulate(payload)
+    try:
+        return planning_service.simulate(db, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ── Content Generation ────────────────────────────────────────────────────────
 
 @router.post("/api/content/generate", response_model=GenerationResponse)
-def generate_content(
+async def generate_content(
     payload: ContentRequest,
-    brand_repo: BrandRepository = Depends(get_brand_repository),
-    content_svc: ContentService = Depends(get_content_service),
+    db: Session = Depends(get_session)
 ) -> GenerationResponse:
-    brand = brand_repo.get()
-    if brand is None:
-        raise HTTPException(status_code=422, detail="콘텐츠 생성 전 브랜드 프로필을 먼저 저장하세요.")
-    return content_svc.generate(brand, payload)
+    """병원 프로필과 유형을 기반으로 AI 모듈 API를 호출하여 콘텐츠를 생성합니다."""
+    clinic = db.exec(select(Clinic)).first()
+    if not clinic:
+        raise HTTPException(status_code=422, detail="콘텐츠 생성 전 병원 프로필을 먼저 저장하세요.")
+    
+    return await content_service.generate(clinic, payload)
+
+
+# ── CRM / Lead ────────────────────────────────────────────────────────────────
+
+@router.post("/api/leads", response_model=Lead, status_code=201)
+def create_lead(
+    payload: Lead,
+    db: Session = Depends(get_session)
+) -> Lead:
+    db.add(payload)
+    db.commit()
+    db.refresh(payload)
+    return payload
 
 
 # ── Review / Approval ─────────────────────────────────────────────────────────
 
-@router.get("/api/review/checklist", response_model=list[ReviewChecklistItem])
-def review_checklist(
-    repo: ReviewRepository = Depends(get_review_repository),
-) -> list[ReviewChecklistItem]:
-    return repo.get_all()
+@router.get("/api/review/checklist", response_model=list[ReviewItem])
+def list_review_checklist(
+    db: Session = Depends(get_session)
+) -> list[ReviewItem]:
+    return db.exec(select(ReviewItem)).all()
 
 
-@router.patch("/api/review/{stage}", response_model=ReviewChecklistItem)
+@router.patch("/api/review/{item_id}", response_model=ReviewItem)
 def update_review_status(
-    stage: str,
-    payload: ReviewStatusUpdate,
-    repo: ReviewRepository = Depends(get_review_repository),
-) -> ReviewChecklistItem:
-    item = repo.update_status(stage=stage, status=payload.status, notes=payload.notes)
-    if item is None:
-        raise HTTPException(status_code=404, detail=f"검토 항목을 찾을 수 없습니다: {stage}")
+    item_id: int,
+    status: str,
+    db: Session = Depends(get_session)
+) -> ReviewItem:
+    item = db.get(ReviewItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="검토 항목을 찾을 수 없습니다.")
+    item.status = status
+    db.add(item)
+    db.commit()
+    db.refresh(item)
     return item
 
 
-# ── Channel Drafts (bootstrap static) ────────────────────────────────────────
+# ── Brand / Clinic ────────────────────────────────────────────────────────────
 
-@router.get("/api/channels/drafts", response_model=dict[str, ChannelDraft])
-def channel_drafts(
-    repo: BootstrapRepository = Depends(get_bootstrap_repository),
-) -> dict[str, ChannelDraft]:
-    return {
-        key: ChannelDraft(**value)
-        for key, value in repo.get_bootstrap().get("channelDrafts", {}).items()
-    }
+@router.post("/api/brand", response_model=Clinic, status_code=201)
+def save_clinic_profile(
+    payload: Clinic,
+    db: Session = Depends(get_session)
+) -> Clinic:
+    # 기존 프로필이 있으면 업데이트, 없으면 신규 생성
+    existing = db.exec(select(Clinic)).first()
+    if existing:
+        for key, value in payload.model_dump(exclude={"id"}).items():
+            setattr(existing, key, value)
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    
+    db.add(payload)
+    db.commit()
+    db.refresh(payload)
+    return payload
+
+
+@router.get("/api/brand", response_model=Clinic)
+def get_clinic_profile(
+    db: Session = Depends(get_session)
+) -> Clinic:
+    clinic = db.exec(select(Clinic)).first()
+    if not clinic:
+        raise HTTPException(status_code=404, detail="병원 프로필이 없습니다.")
+    return clinic

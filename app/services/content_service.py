@@ -1,88 +1,55 @@
 from __future__ import annotations
+import httpx
+from typing import List, Dict
+from app.schemas.contracts import Clinic, ContentRequest, DraftContent, GenerationResponse
 
-from app.schemas.contracts import BrandProfile, ContentRequest, DraftContent, GenerationResponse
-
-_CHANNEL_TEMPLATES: dict[str, dict[str, str]] = {
-    "blog": {
-        "headline": "{event_name} - {hospital_name}에서 준비한 특별 이벤트",
-        "body": (
-            "{core_message}\n\n"
-            "▶ 이벤트 기간: {event_start} ~ {event_end}\n\n"
-            "{highlights_section}"
-            "【자주 묻는 질문】\n"
-            "Q. 시술 후 일상생활이 가능한가요?\n"
-            "A. {doctor_philosophy}\n\n"
-            "【주의사항】\n"
-            "- 시술 전 충분한 상담을 진행합니다.\n"
-            "- 개인차에 따라 결과가 다를 수 있습니다."
-        ),
-        "cta": "지금 예약하기",
-    },
-    "sns": {
-        "headline": "{core_message}",
-        "body": (
-            "✔ {event_name}\n"
-            "📅 {event_start} ~ {event_end}\n\n"
-            "{highlights_section}"
-            "#{hospital_name} #{tag_procedures}"
-        ),
-        "cta": "프로필 링크에서 예약",
-    },
-    "web": {
-        "headline": "{event_name}",
-        "body": "{core_message} {event_start}부터 {event_end}까지 진행됩니다.",
-        "cta": "이벤트 신청",
-    },
-    "app": {
-        "headline": "[{hospital_name}] {event_name}",
-        "body": "{core_message}",
-        "cta": "앱에서 예약",
-    },
-}
-
-_REVIEW_NOTES: list[str] = [
-    "의료광고법 제56조 기준으로 과장·허위 표현 여부를 검토하세요.",
-    "금지어({banned_terms}) 포함 여부를 수동으로 확인하세요.",
-    "시술 결과에 대한 단정적 표현이 없는지 확인하세요.",
-]
-
+AI_API_URL = "http://localhost:8001/generate"
 
 class ContentService:
-    def generate(self, brand: BrandProfile, request: ContentRequest) -> GenerationResponse:
-        highlights_section = (
-            "【주요 혜택】\n" + "\n".join(f"• {h}" for h in request.highlights) + "\n\n"
-            if request.highlights
-            else ""
-        )
-        tag_procedures = " #".join(brand.signature_procedures[:3])
-        banned_terms_str = ", ".join(brand.banned_terms) if brand.banned_terms else "없음"
-
-        context = {
-            "event_name": request.event_name,
-            "hospital_name": brand.hospital_name,
-            "core_message": request.core_message,
-            "event_start": request.event_start,
-            "event_end": request.event_end,
-            "doctor_philosophy": brand.doctor_philosophy,
-            "highlights_section": highlights_section,
-            "tag_procedures": tag_procedures,
-            "banned_terms": banned_terms_str,
+    async def generate(self, clinic: Clinic, request: ContentRequest) -> GenerationResponse:
+        """
+        AI 모듈 API를 호출하여 콘텐츠를 생성합니다 (Backend <-> AI 연동).
+        """
+        # 1. AI 모듈 스키마에 맞게 데이터 변환
+        ai_payload = {
+            "payload": {
+                "product": request.event_name,
+                "summary": request.core_message,
+                "goals": request.highlights,
+                "features": request.highlights
+            },
+            "brand": {
+                "hospital_name": clinic.name,
+                "target_audience": clinic.target_audience,
+                "doctor_philosophy": clinic.doctor_philosophy,
+                "signature_procedures": clinic.signature_procedures,
+                "brand_tone": clinic.brand_tone,
+                "banned_terms": clinic.banned_terms
+            }
         }
 
-        channels: dict[str, DraftContent] = {}
-        for channel in request.channels:
-            tmpl = _CHANNEL_TEMPLATES.get(channel)
-            if tmpl:
-                channels[channel] = DraftContent(
-                    headline=tmpl["headline"].format(**context),
-                    body=tmpl["body"].format(**context),
-                    cta=tmpl["cta"],
-                )
+        # 2. AI API 호출
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(AI_API_URL, json=ai_payload, timeout=10.0)
+                response.raise_for_status()
+                ai_data = response.json()
+            except Exception as e:
+                # AI API 호출 실패 시 Fallback 로직 또는 에러 처리
+                raise RuntimeError(f"AI 모듈 연동 실패: {str(e)}")
 
-        review_notes = [note.format(**context) for note in _REVIEW_NOTES]
+        # 3. AI 결과를 Backend 스키마로 변환
+        channels: Dict[str, DraftContent] = {}
+        for ch_id, content in ai_data["channels"].items():
+            if ch_id in request.channels:
+                channels[ch_id] = DraftContent(
+                    headline=content["headline"],
+                    body=content["body"],
+                    cta=content["cta"]
+                )
 
         return GenerationResponse(
             event_name=request.event_name,
             channels=channels,
-            review_notes=review_notes,
+            review_notes=ai_data["review_notes"]
         )

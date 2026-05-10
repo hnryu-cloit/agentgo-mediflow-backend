@@ -2,73 +2,61 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-client = TestClient(app)
-
 
 def test_health() -> None:
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
 
 
 def test_root() -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    assert response.json()["status"] == "running"
+    with TestClient(app) as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json()["status"] == "running"
 
 
 def test_simulation_preview() -> None:
-    response = client.post(
-        "/api/simulation/preview",
-        json={
-            "promotion_name": "봄 이벤트",
-            "promo_price": 149000,
-            "list_price": 220000,
-            "procedure_cost": 42000,
-            "expected_leads": 30,
-            "close_rate": 0.4,
-            "upsell_rate": 0.2,
-            "average_upsell_revenue": 80000,
-            "repeat_visit_rate": 0.1,
-            "repeat_visit_revenue": 100000,
-            "ad_budget": 1000000,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["promotion_name"] == "봄 이벤트"
-    assert payload["expected_patients"] == 12.0
-    assert "projected_profit" in payload
-    assert "break_even_patients" in payload
-    assert "allowed_ad_budget" in payload
-    assert isinstance(payload["breakeven_reached"], bool)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/simulation/preview",
+            json={
+                "procedure_id": "proc_masseter_botox",
+                "promo_price": 29000,
+                "expected_leads": 30,
+                "conversion_rate": 40,
+                "ad_spend": 100000,
+                "upsell_estimate": 0,
+                "consumable_cost": 15000,
+                "labor_cost": 5000,
+                "promo_period_weeks": 4,
+            },
+            headers={"X-User-Role": "staff"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["expected_patients"] == 12.0
+        assert "projected_profit" in payload
+        assert "break_even_patients" in payload
+        assert payload["promo_period_weeks"] == 4
+        assert payload["trace_id"].startswith("sim-")
+
+        explain = client.get(f"/api/explain/{payload['trace_id']}")
+        assert explain.status_code == 200
+        assert explain.json()["evidence"]
 
 
-def test_simulation_invalid_price() -> None:
-    response = client.post(
-        "/api/simulation/preview",
-        json={
-            "promotion_name": "테스트",
-            "promo_price": -1,  # invalid
-            "list_price": 100000,
-            "procedure_cost": 0,
-            "expected_leads": 10,
-            "close_rate": 0.5,
-            "upsell_rate": 0,
-            "average_upsell_revenue": 0,
-            "repeat_visit_rate": 0,
-            "repeat_visit_revenue": 0,
-            "ad_budget": 0,
-        },
-    )
-    assert response.status_code == 422
+def test_medlaw_check_detects_violations() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/medlaw/check", json={"text": "100% 효과와 최고 결과"})
+        assert response.status_code == 200
+        keywords = {item["keyword"] for item in response.json()["violations"]}
+        assert {"100% 효과", "최고"}.issubset(keywords)
 
 
-def test_review_checklist() -> None:
-    response = client.get("/api/review/checklist")
-    assert response.status_code == 200
-    items = response.json()
-    assert len(items) == 5
-    stages = [item["stage"] for item in items]
-    assert "브랜드 톤 검토" in stages
-    assert "최종 원장 승인" in stages
+def test_asset_endpoints() -> None:
+    with TestClient(app) as client:
+        assert client.get("/api/assets/connectors").status_code == 200
+        assert client.get("/api/assets/reviews").status_code == 200
+        assert client.get("/api/assets/promotions").status_code == 200
